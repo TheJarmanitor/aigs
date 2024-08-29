@@ -21,11 +21,13 @@ import chex
 rng = random.PRNGKey(seed := 0)  # Random number generator
 rng, *keys = random.split(rng, 4)  # Key for each operation
 
-sigma = random.normal(keys[0], (1,))  # Standard deviation
+sigma = jnp.abs(random.normal(keys[0], (1,)))  # Standard deviation
 mu = random.normal(keys[1], (1,))  # Mean
 
 x = random.normal(keys[2], (10,)) * sigma + mu
 print(x)
+
+print(type(x))
 
 # %% Question One [markdown]
 # Compute the mean, variance, median, and standard deviation of the data set,
@@ -33,7 +35,18 @@ print(x)
 # Write your own functions to do this.
 
 # %% Solution
+def mean(x: Array) -> Array:
+    return x.sum()/x.size
 
+print(mean(x))
+
+def median(x: Array) -> Array:
+    return x.sort()[x.size//2]
+print(median(x))
+
+def variance(x: Array) -> Array:
+    return jnp.sum(jnp.power(x - mean(x),2))/x.size
+print(variance(x))
 # %% Question two [markdown]
 # We are randomly setting the mean and the standard deviation from which the dataset is drawn.
 # How close are the values you computed to the true values of `mu` and `sigma`?
@@ -41,6 +54,12 @@ print(x)
 # would the values you computed get closer to the true values?
 
 # %% Solution
+sample_sizes = [10, 100, 1000, 10000, 100000]
+print(f"original values: mean {mu} sd {sigma}")
+for n in sample_sizes:
+    x = random.normal(keys[2], (n,)) * sigma + mu
+
+    print(f"sample size {n}: mean {mean(x)} sd {jnp.sqrt(variance(x))}")
 
 # %% Vector exercise [markdown] #########################################
 # You're given two vectors `a` and `b` below.
@@ -55,6 +74,9 @@ b = random.normal(keys[1], (10,))
 # write a function that computes the dot product of two vectors without using the built-in function `jnp.dot`.
 
 # %% Solution
+
+def dot_product(a: Array, b: Array) -> Array:
+    return
 
 
 # %% Question four [markdown]
