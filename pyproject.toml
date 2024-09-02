@@ -6,7 +6,7 @@ authors = ["Noah Syrkis <noah@syrkis.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "^3.11,<3.12"
 jax = "^0.4.31"
 optax = "^0.2.3"
 jupyterlab = "^4.2.4"
@@ -20,6 +20,7 @@ equinox = "^0.11.5"
 jaxtyping = "^0.2.33"
 tensorflow-datasets = "^4.9.6"
 scikit-learn = "^1.5.1"
+pgx = "^2.2.0"
 
 
 [build-system]

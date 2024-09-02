@@ -5,11 +5,15 @@
 #########################################################################
 # %% Imports (add as needed) ############################################
 from jax import grad, random, nn, tree
+from jax import grad, random, nn, tree
 import jax.numpy as jnp
 from jaxtyping import Array
 import chex
-from typing import Callable, Dict, List
 import equinox as eqx
+import optax
+
+from typing import Callable, Dict, List
+from tqdm import tqdm
 import os
 from tqdm import tqdm
 
@@ -75,6 +79,10 @@ y_hat = model(params, x_data)
 
 (y_hat == y_data).mean()
 
+    # params -= gradient_of_loss(params)
+# %%
+y_hat = model(params, x_data)
+(y_hat.argmax(axis=1) == y_data).astype(jnp.int32).mean()
 # %% play with JIT and vmap to speed up training and simplify code
 
 
@@ -98,7 +106,7 @@ class Value:
 
 def add(x: Value, y: Value) -> Value:
     """Add two values."""
-    raise NotImplementedError
+    return Value(x.value + y.value, parents=[x, y], gradient_fn=lambda: 1)
 
 
 def mul(x: Value, y: Value) -> Value:
@@ -114,3 +122,7 @@ def backward(x: Value, gradient: Array) -> Dict[Value, Array]:
 def update(x: Value, gradient: Array) -> Value:
     """Apply the gradient to the value."""
     raise NotImplementedError
+
+
+# %%
+jnp.array(1)

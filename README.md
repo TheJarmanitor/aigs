@@ -28,3 +28,7 @@ There are three mandatory projects in this course.
 They are all under `/todo` and are not yet completed.
 Won't make much sense to look at them until they are completed,
 as major parts will be changed and added.
+
+## read
+
+[backprob](https://colah.github.io/posts/2015-08-Backprop/)

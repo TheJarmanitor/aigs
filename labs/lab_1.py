@@ -19,6 +19,7 @@ import chex
 
 # %% Setup
 rng = random.PRNGKey(seed := 0)  # Random number generator
+
 rng, *keys = random.split(rng, 4)  # Key for each operation
 
 sigma = jnp.abs(random.normal(keys[0], (1,)))  # Standard deviation
