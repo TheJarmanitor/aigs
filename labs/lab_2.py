@@ -4,13 +4,14 @@
 
 #########################################################################
 # %% Imports (add as needed) ############################################
-from jax import grad
+from jax import grad, random, nn, tree
 import jax.numpy as jnp
 from jaxtyping import Array
 import chex
 from typing import Callable, Dict, List
 import equinox as eqx
 import os
+from tqdm import tqdm
 
 import tensorflow_datasets as tfds  # <- for data
 
@@ -25,16 +26,54 @@ import matplotlib.pyplot as plt  # <- for plotting
 
 # %% Data
 mnist = tfds.load("mnist", split="train")
-x_data = jnp.array([x["image"] for x in tfds.as_numpy(mnist)])
+x_data = jnp.array([x["image"] for x in tfds.as_numpy(mnist)]).reshape(-1,28*28)
 y_data = jnp.array([x["label"] for x in tfds.as_numpy(mnist)])
 
-# %% Params (define model params in a dict (or list, of chex.dataclass))
+# %% Test
+print(x_data.shape)
+# %% random keys
+
+rng = random.PRNGKey(seed := 1331)  # Random number generator
+
+
+# %% params
+@chex.dataclass
+class Params:
+    w1 = random.normal(rng, (x_data.shape[1], 64))
+    b1 = random.normal(rng, 64)
+    w2 = random.normal(rng, (64, 10))
+    b2 = random.normal(rng, 10)
+params = Params()
+
 
 # %% Model (define model as a function that takes params and x_data)
+def model(params: Params, x_data: Array):
+    z = x_data @ params.w1 + params.b1
+    z = nn.relu(z)
+    z = z @ params.w2 + params.b2
+    z = nn.softmax(z)
+
+    return jnp.argmax(z, axis=1)
+
 
 # %% Loss (define loss as a function that takes params, x_data, y_data)
+def loss(params: chex.dataclass, x_data: Array, y_data):
+    y_hat = model(params, x_data)
+    return jnp.mean((y_hat - y_data)**2)
 
 # %% Train loop
+
+def train(loss_fn: Callable, params: Params, steps: int, learning_rate: float, x_data: Array, y_data: Array):
+    for i in tqdm(range(steps)):
+        grads = grad(loss_fn)(params, x_data, y_data)
+        params = tree.map(lambda p, g: p - learning_rate * g, params, grads)
+
+train(loss, params, 10000, 0.001, x_data, y_data)
+# %% test
+
+y_hat = model(params, x_data)
+
+(y_hat == y_data).mean()
 
 # %% play with JIT and vmap to speed up training and simplify code
 
