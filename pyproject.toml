@@ -21,6 +21,7 @@ jaxtyping = "^0.2.33"
 tensorflow-datasets = "^4.9.6"
 scikit-learn = "^1.5.1"
 pgx = "^2.2.0"
+plotly = "^5.24.0"
 
 
 [build-system]
