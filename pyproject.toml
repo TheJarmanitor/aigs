@@ -28,5 +28,5 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.pyright]
-venvPath = "/home/thejarmanitor/.local/share/jupyter/kernels/"
-venv = "/home/thejarmanitor/.local/share/jupyter/kernels/aigs"
+venvPath = "/home/thejarmanitor/miniconda3/envs"
+venv = "aigs"
