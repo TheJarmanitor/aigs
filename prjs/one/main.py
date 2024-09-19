@@ -109,7 +109,7 @@ def train(
     learning_rate,
     epsilon_decay=0.995,
     epsilon_min=0.01,
-    tau=0.0005,
+    tau=1,
     warmup_steps=1000,
 ):
     obs, info = env.reset()
@@ -186,32 +186,32 @@ def train(
 rng = random.PRNGKey(1331)
 entry = namedtuple("Memory", ["obs", "action", "reward", "next_obs", "done"])
 memory = deque(maxlen=10000)  # <- replay buffer
-max_episodes = 1000
-gamma = 0.9
+max_episodes = 2000
+gamma = 0.95
 epsilon = 0.5
 t = 1000
 epsilon_decay = 0.995
-sample_size = 32
-learning_rate = 0.00005
+sample_size = 128
+learning_rate = 0.1
 # define more as needed
 env = gym.make("CartPole-v1", render_mode="human")  #  render_mode="human")
 
 params = init_params(rng, env)
 
 
-# train(
-#     rng,
-#     model,
-#     params,
-#     max_episodes,
-#     gamma,
-#     epsilon,
-#     t,
-#     sample_size,
-#     learning_rate,
-#     epsilon_decay,
-# )
-random_play(rng, 100)
+train(
+    rng,
+    model,
+    params,
+    max_episodes,
+    gamma,
+    epsilon,
+    t,
+    sample_size,
+    learning_rate,
+    epsilon_decay,
+)
+# random_play(rng, 100)
 
 
 # %% Environment #########################################################
@@ -232,6 +232,5 @@ def play(rng, model, max_episodes, weights_file):
         done = False
         obs, info = env.reset()
     env.close()
-
 
 play(rng, model, 100, weights_file="weights.pkl")
