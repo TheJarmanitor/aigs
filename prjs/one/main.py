@@ -15,27 +15,23 @@ import pickle
 
 # %% Model ###############################################################
 
-
-def init_params(rng, env):
-    rng, *keys = random.split(rng, 10)
+def init_params(rng, layers):
+    params = []
     init_fn = nn.initializers.orthogonal()
-    w1 = init_fn(keys[0], (env.observation_space.shape[0], 16))
-    b1 = jnp.zeros(16)
-    w2 = init_fn(keys[1], (16, 16))
-    b2 = jnp.zeros(16)
-    w3 = init_fn(keys[2], (16, env.action_space.n))
-    b3 = jnp.zeros(env.action_space.n)
-    return [w1, b1, w2, b2, w3, b3]
+    rng, *keys = random.split(rng, len(layers))
+    for i, o in zip(layers[:-1], layers[1:]):
+        w = init_fn(keys[0], (i, o))
+        b = jnp.zeros(o)
+        params.append((w,b))
+    return params
+
 
 
 @jit
 def model(params, x_data):
-    z = x_data @ params[0] + params[1]
-    z = nn.relu(z)
-    z = z @ params[2] + params[3]
-    z = nn.relu(z)
-    z = z @ params[4] + params[5]
-    # z = nn.softmax(z)
+    for w, b in params:
+        z = x_data @ w + b
+        x_data = nn.relu(z)
 
     # return jnp.argmax(z)
     return z
@@ -54,7 +50,7 @@ def e_greedy_policy_fn(rng, q_a, epsilon):  # obs (shape: (2,)) to action (shape
         action, rng = random_policy_fn(rng)
     return int(action), rng
 
-
+@value_and_grad
 def td_loss(params, target_params, model, gamma, obs, action, reward, next_obs, done):
     next_action = jnp.argmax(model(params, next_obs), axis=1)
     q_next = jnp.take_along_axis(
@@ -62,11 +58,26 @@ def td_loss(params, target_params, model, gamma, obs, action, reward, next_obs, 
     ).squeeze()
     target = reward + gamma * q_next * (1.0 - done)
     q_pred = model(params, obs)
-    action = action[:, None]
-    q_pred_selected = jnp.take_along_axis(q_pred, action, axis=1).squeeze()
+    q_pred_selected = jnp.take_along_axis(q_pred, action[:, None], axis=1).squeeze()
     loss = jnp.mean(jnp.square(target - q_pred_selected))
     return loss
 
+def update_params(params, target_params, model, gamma, lr, env_info):
+    loss, grads = td_loss(params, target_params, model, gamma, *env_info)
+    params = tree.map(lambda p, g: p - lr * g, params, grads)
+
+    return params, loss
+
+
+def soft_update(params, target_params, tau):
+    return tree.map(lambda p, tp: tau * p + (1 - tau) * tp, params, target_params)
+
+def sample_batch(key, memory, batch_size):
+    idxs = random.choice(key, len(memory), (batch_size,), replace=False)
+
+    batch = map(jnp.array, zip(*(memory[i] for i in idxs)))
+
+    return tuple(batch)
 
 # %% Environment #########################################################
 def random_play(rng, max_episodes):
@@ -92,8 +103,6 @@ def random_play(rng, max_episodes):
     env.close()
 
 
-def soft_update(params, target_params, tau):
-    return tree.map(lambda p, tp: tau * p + (1 - tau) * tp, params, target_params)
 
 
 # %% trainig
@@ -120,7 +129,8 @@ def train(
     done = False
     warmup_phase = True
     best_reward = 0
-    for i in range(1, max_episodes):
+    # for i in range(1, max_episodes):
+    for i in (pbar := tqdm(range(max_episodes))):
         cum_reward = 0.0
         while not done:
             steps += 1
@@ -135,49 +145,29 @@ def train(
             memory.append(entry(obs, action, reward, next_obs, done))
             obs, info = next_obs, info
             if warmup_phase and steps >= warmup_steps:
-                print("Warmup has ended")
                 steps = 0
                 warmup_phase = False
             if steps % t == 0 and not warmup_phase:
                 current_reward_avg = jnp.mean(jnp.array(avg_cum_reward))
                 if current_reward_avg >= best_reward:
-                    print("New best policy found! Saving")
                     with open("weights.pkl", "wb") as file:
                         pickle.dump(params, file)
                     best_reward = current_reward_avg
                 target_params = soft_update(params, target_params, tau)
-                print(
-                    f"Episode: {i}, Step: {steps}, average cumulative_reward: {current_reward_avg} average loss: {jnp.mean(jnp.array(avg_loss))}"
-                )
+                # print(
+                #     f"Episode: {i}, Step: {steps}, average cumulative_reward: {current_reward_avg} average loss: {jnp.mean(jnp.array(avg_loss))}"
+                # )
         if len(memory) >= sample_size and not warmup_phase:
-            batch = sample(memory, sample_size)
-
-            obs_batch = jnp.array([x.obs for x in batch])
-            action_batch = jnp.array([x.action for x in batch])
-            reward_batch = jnp.array([x.reward for x in batch])
-            next_obs_batch = jnp.array([x.next_obs for x in batch])
-            done_batch = jnp.array([x.done for x in batch])
-
-            loss, grads = value_and_grad(td_loss)(
-                params,
-                target_params,
-                model,
-                gamma,
-                obs_batch,
-                action_batch,
-                reward_batch,
-                next_obs_batch,
-                done_batch,
-            )
+            batch = sample_batch(rng, memory, sample_size)
             # print(loss)
+            params, loss = update_params(params, target_params, model, gamma, learning_rate, batch)
             avg_loss.append(loss)
-            params = tree.map(lambda p, g: p - learning_rate * g, params, grads)
-            # params = [params[i] - learning_rate * grads[i] for i in range(len(params))]
         if not warmup_phase:
             avg_cum_reward.append(cum_reward)
             epsilon = max(epsilon_min, epsilon * epsilon_decay)
         done = False
         obs, info = env.reset()
+        pbar.set_description(f"epsilon: {epsilon}, average cumulative_reward: {jnp.mean(jnp.array(avg_cum_reward))} average loss: {jnp.mean(jnp.array(avg_loss))}")
 
     env.close()
 
@@ -188,15 +178,16 @@ entry = namedtuple("Memory", ["obs", "action", "reward", "next_obs", "done"])
 memory = deque(maxlen=10000)  # <- replay buffer
 max_episodes = 2000
 gamma = 0.95
-epsilon = 0.5
+epsilon = 1
 t = 1000
 epsilon_decay = 0.995
 sample_size = 128
-learning_rate = 0.1
+learning_rate = 5e-4
 # define more as needed
 env = gym.make("CartPole-v1", render_mode="human")  #  render_mode="human")
+layers = [env.observation_space.shape[0], 64, 64, env.action_space.n]
 
-params = init_params(rng, env)
+params = init_params(rng, layers)
 
 
 train(
