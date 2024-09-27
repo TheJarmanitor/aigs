@@ -18,56 +18,130 @@ gym.register_envs(ale_py)
 env = gym.make("ALE/Frogger-v5", obs_type="grayscale")
 obs, info = env.reset()
 
-print(obs.shape)
-plt.imshow(obs)
 # %% Step 2: crate a convolutional model that maps the image to a latent space (like our MNIST classifier, except we won't classify anything)
 class Autoencoder():
-    def __init__(self, rng) -> None:
+    def __init__(self, rng, layers, img_size, latent_size=100, kernel_shape=3) -> None:
         self.rng = rng
+        self.layers = layers
+        self.img_size = img_size
+        self.latent_size = latent_size
+        self.kernel_shape = kernel_shape
 
-    def init_kernel(self, key, in_size, out_size, kernel_shape=3):
-        kernel = nn.initializers.glorot_uniform()(key, (out_size, in_size, kernel_shape, kernel_shape))
+    def init_kernel(self, key, in_size, out_size):
+        init_fn = nn.initializers.glorot_uniform()
+        kernel = init_fn(key, (out_size, in_size, self.kernel_shape, self.kernel_shape))
         return kernel
 
-    def init_encoder(self, rng, channel_size, layers, kernel_shape):
-        kernels = []
-        for i, o in zip(layers[:-1], layers[1:]):
-            rng, key  = random.split(rng)
-            kernel = self.init_kernel(key, i, o, kernel_shape)
-            bias = jnp.zeros(kernel.shape)
-            kernels.append((kernel, bias))
-        return kernels
+    def init_fc(self, key, in_size, out_size):
 
-        return kernels
+        init_fn = nn.initializers.orthogonal()
+        weights = init_fn(key, (in_size, out_size))
+
+        return weights
+
+
+    def init_encoder(self, rng, channel_size):
+        params = {
+            "kernels": [],
+            "fc": []
+        }
+        for i, o in zip(self.layers[:-1], self.layers[1:]):
+            rng, key  = random.split(rng)
+            kernel = self.init_kernel(key, i, o)
+            bias = jnp.zeros((1,1, self.img_size, self.img_size))
+            params["kernels"].append((kernel, bias))
+        rng, key = random.split(rng)
+        linear_weights = self.init_fc(key, self.layers[-1]*self.img_size**2, self.latent_size)
+        weight_bias = jnp.zeros(self.latent_size)
+
+        params["fc"].append((linear_weights, weight_bias))
+
+        return params
+
 
     def conv2D(self, input, kernel, strides=(1,1), padding='SAME'):
         return lax.conv(input, kernel, strides, padding)
 
+
     # def inverse_conv2D(self, input, kernel, strides=1, padding='SAME')
 
-    def encoder(self, x_data, parameters, kernel_size):
-        for kernel, bias in parameters:
+    def encoder(self, x_data, parameters):
+        for kernel, bias in parameters["kernels"]:
             z = self.conv2D(x_data, kernel) + bias
             x_data = nn.relu(z)
+
+        z = x_data.reshape(1,-1)
+        for weights, bias in parameters["fc"]:
+           x_data = z @ weights + bias
+
         return x_data
 
+
+
+    # %% Step 3: create a deconvolutional model that maps the latent space back to an image
+    def init_decoder(self, rng, channel_size):
+        params = {
+            "kernels": [],
+            "fc": []
+        }
+        r_layers = list(reversed(self.layers))
+        rng, key = random.split(rng)
+        linear_weights = self.init_fc(key, self.latent_size, r_layers[0]*self.img_size**2)
+        weight_bias = jnp.zeros(r_layers[0]*self.img_size**2)
+        params["fc"].append((linear_weights, weight_bias))
+        for i, o in zip(r_layers[:-1], r_layers[1:]):
+            rng, key  = random.split(rng)
+            kernel = self.init_kernel(key, i, o)
+            bias = jnp.zeros((1,1,self.img_size, self.img_size))
+            params["kernels"].append((kernel, bias))
+        return params
+
+
+    def deconv2D(self, input, kernel, strides=(1,1), padding='SAME'):
+        return lax.conv_transpose(input, kernel, strides, padding, dimension_numbers=('NCHW', 'OIHW', 'NCHW'))
+
+    def decoder(self, x_data, parameters):
+        r_layers = list(reversed(self.layers))
+        for weights, bias in parameters["fc"]:
+            z = x_data @ weights + bias
+            x_data = nn.relu(z)
+
+        z = x_data.reshape(1, r_layers[0], self.img_size, -1,)
+
+        for kernel, bias in parameters["kernels"]:
+            x_data = self.deconv2D(z, kernel) + bias
+            z = nn.relu(x_data)
+
+        return z
+
 rng = random.PRNGKey(1331)
-encoder = Autoencoder(rng)
-layers = [1, 16, 32, 64, 128]
-
+latent_space = 100
+layers = [1, 8, 16, 32, 64]
+kernel_shape = 3
 obs_reshape = resize(obs, (128,128), method="linear")
+obs_transformed = jnp.reshape(obs_reshape, (1,1,128,128))/255
 
-kernel_list = encoder.init_encoder(rng, 1, layers, kernel_shape=3)
-obs_transformed = jnp.reshape(obs_reshape, (1,1,128,128))
+autoencoder = Autoencoder(rng, layers, 128)
 
-# encoder.conv2D(obs_transformed, kernel_list[0])
 
-result_image = encoder.encoder(obs_transformed, kernel_list, 3)
+kernel_list_enc = autoencoder.init_encoder(rng, 1)
+kernel_list_dec = autoencoder.init_decoder(rng, 1)
 
-plt.imshow(result_image[0,5])
+print()
 
-# %% Step 3: create a deconvolutional model that maps the latent space back to an image
-#
+latent_space = autoencoder.encoder(obs_transformed, kernel_list_enc)
+
+resulting_image = autoencoder.decoder(latent_space, kernel_list_dec)
+print(resulting_image.shape)
+
+plt.imshow(resulting_image.reshape(128, 128))
+
+# test_kernel = kernel_list_dec["kernels"][0][0]
+# test_kernel.shape
+
+# autoencoder.deconv2D(resulting_image, test_kernel)
+
+
 # %% Step 4: train the model to minimize the reconstruction error
 
 # %% Step 5: generate some images by sampling from the latent space

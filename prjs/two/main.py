@@ -1,20 +1,30 @@
+# %% libraries
 import jax
-from craftax.craftax_env import make_craftax_env_from_name
+import jumanji
+from jumanji.wrappers import AutoResetWrapper
 
 
+
+# %% Create environment
 rng = jax.random.PRNGKey(0)
-rng, _rng = jax.random.split(rng)
-rngs = jax.random.split(_rng, 3)
 
-# Create environment
-env = make_craftax_env_from_name("Craftax-Symbolic-v1", auto_reset=True)
-env_params = env.default_params
+env = jumanji.make("Sokoban-v0")
+env = AutoResetWrapper(env)
 
-# Get an initial state and observation
-obs, state = env.reset(rngs[0], env_params)
+# %% data gathering
 
-# Pick random action
-action = env.action_space(env_params).sample(rngs[1])
+def step_fn(key, env, state):
+    num_actions = env.action_spec.num_values
+    action = jax.random.randint(key=key, minval=0, maxval=num_actions, shape=())
+    new_state, timestep = env.step(state, action)
+    return new_state, timestep
 
-# Step environment
-obs, state, reward, done, info = env.step(rngs[2], state, action, env_params)
+
+
+def data_gathering(key, step_fn, env, n_steps=1000):
+    state = env.reset(key)
+    random_keys = jax.random.split(key, n_steps)
+    state, rollout = jax.lax.scan(step_fn, )
+    return rollout
+
+data_gathering(rng, step_fn, env)
