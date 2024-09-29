@@ -5,7 +5,6 @@ import jax.numpy as jnp
 from jax.image import resize
 import optax
 import jumanji
-from jumanji.wrappers import AutoResetWrapper
 from functools import partial
 import matplotlib.pyplot as plt
 
@@ -14,35 +13,21 @@ import matplotlib.pyplot as plt
 rng = jax.random.PRNGKey(0)
 
 env = jumanji.make("Sokoban-v0")
-env = AutoResetWrapper(env)
 
 # %% data gathering
 
-
-def step_fn(state, key, env):
-    num_actions = env.action_spec.num_values
-    action = jax.random.randint(key=key, minval=0, maxval=num_actions, shape=())
-    new_state, timestep = env.step(state, action)
-    return new_state, timestep
-
-
-def data_gathering(key, step_fn, env, n_steps=1000):
-    state, timestep = env.reset(key)
+def data_gathering(key, env, n_steps=1000):
     random_keys = random.split(key, n_steps)
     data_list = []
     for r in random_keys:
-        new_state, _ = step_fn(state, r, env)
+        state, timestep = env.reset(key)
         data_list.append(
-            jnp.array((new_state["fixed_grid"], new_state["variable_grid"]))
+            jnp.array((state["fixed_grid"], state["variable_grid"]))
         )
-        # print("data added")
-        state = new_state
     return jnp.array(data_list, dtype="float32")
 
 
-state, _ = env.reset(rng)
-
-data = data_gathering(rng, step_fn, env)
+data = data_gathering(rng, env)
 
 print(data.shape)
 # %%
@@ -155,7 +140,7 @@ class Autoencoder:
 
 
 @jax.jit
-def mse_loss(model, params, batch):
+def mse_loss(params, model, batch):
     imgs, _ = batch
     recon_imgs = model(batch, *params)
     loss = (
