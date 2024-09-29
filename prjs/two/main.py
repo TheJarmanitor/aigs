@@ -7,6 +7,7 @@ import optax
 import jumanji
 from functools import partial
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 
 # %% Create environment
@@ -16,14 +17,13 @@ env = jumanji.make("Sokoban-v0")
 
 # %% data gathering
 
-def data_gathering(key, env, n_steps=1000):
+
+def data_gathering(key, env, n_steps=10000):
     random_keys = random.split(key, n_steps)
     data_list = []
     for r in random_keys:
         state, timestep = env.reset(key)
-        data_list.append(
-            jnp.array((state["fixed_grid"], state["variable_grid"]))
-        )
+        data_list.append(jnp.array((state["fixed_grid"], state["variable_grid"])))
     return jnp.array(data_list, dtype="float32")
 
 
@@ -83,7 +83,7 @@ class Autoencoder:
             z = self.conv2D(x_data, kernel) + bias
             x_data = nn.relu(z)
 
-        z = x_data.reshape(self.batch_size, -1)
+        z = x_data.reshape(x_data.shape[0], -1)
         for weights, bias in parameters["fc"]:
             x_data = z @ weights + bias
 
@@ -118,10 +118,10 @@ class Autoencoder:
             x_data = nn.relu(z)
 
         z = x_data.reshape(
-            self.batch_size,
+            -1,
             r_layers[0],
             self.img_size,
-            -1,
+            self.img_size,
         )
 
         for kernel, bias in parameters["kernels"]:
@@ -139,36 +139,56 @@ class Autoencoder:
 # %%
 
 
-@jax.jit
 def mse_loss(params, model, batch):
-    imgs, _ = batch
-    recon_imgs = model(batch, *params)
+    imgs = batch
+    recon_imgs = model(batch, params["encoder"], params["decoder"])
     loss = (
-        ((recon_imgs - imgs) ** 2).mean(axis=0).sum()
+        ((recon_imgs - batch) ** 2).mean(axis=0).sum()
     )  # Mean over batch, sum over pixels
     return loss
 
 
-optim = optax.adam(learning_rate=0.0005)
+def get_batch(data, batch_size):
+    indices = jnp.arange(data.shape[0])
+    sample_idxs = random.choice(rng, indices, shape=(batch_size,), replace=False)
+    return data[sample_idxs]
+
 
 # %%
 latent_space = 100
 layers = [2, 8, 16, 32, 64]
 kernel_shape = 3
 
-autoencoder = Autoencoder(rng, layers, 10, batch_size=32)
+autoencoder = Autoencoder(rng, layers, 10, batch_size=128)
 
 params = {
     "encoder": autoencoder.init_encoder(rng, 2),
     "decoder": autoencoder.init_decoder(rng, 2),
 }
+optim = optax.adam(learning_rate=0.000005)
+opt_state = optim.init(params)
+epochs = 1000
 
-indices = jnp.arange(data.shape[0])
-sample_idxs = random.choice(
-    rng, indices, shape=(autoencoder.batch_size,), replace=False
-)
-state_example = data[sample_idxs]
+for i in (pbar := tqdm(range(epochs))):
+    batch = get_batch(data, 128)
+    loss, grad = jax.value_and_grad(mse_loss)(params, autoencoder.forward, batch)
+    pbar.set_description("Processing %.2f" % loss)
+    updates, opt_state = optim.update(grad, opt_state, params)
 
-result_level = autoencoder.forward(state_example, params["encoder"], params["decoder"])
+    params = optax.apply_updates(params, updates)
+# %%
+test = autoencoder.encoder(get_batch(data, 128), params["encoder"])
+test.shape
 
-print(result_level.shape)
+# %%
+test[15]
+# %%
+
+test_level = autoencoder.decoder(test[15], params["decoder"]).astype(int)
+
+test_level.shape
+
+# %%
+state, _ = env.reset(rng)
+
+state["fixed_grid"] = test_level[:, 0]
