@@ -2,6 +2,7 @@
 import jax
 from jax import random, grad, jit, vmap, lax, tree, nn
 from jumanji.environments.routing.sokoban.env import State
+from jumanji.environments.routing.sokoban.generator import DeepMindGenerator
 import jax.numpy as jnp
 from jax.image import resize
 import matplotlib
@@ -10,6 +11,8 @@ import jumanji
 from functools import partial
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+
+%matplotlib inline
 
 
 # %% Create environment
@@ -24,7 +27,7 @@ def data_gathering(key, env, n_steps=3000, scale=False):
     random_keys = random.split(key, n_steps)
     data_list = []
     for r in random_keys:
-        state, timestep = env.reset(key)
+        state, timestep = env.reset(r)
         data_list.append(jnp.array((state["fixed_grid"], state["variable_grid"])))
     if scale:
         return jnp.array(data_list, dtype="float32")/4.0
@@ -35,8 +38,6 @@ data = data_gathering(rng, env)
 
 print(data.shape)
 # %%
-
-print(data[0,1])
 
 
 # %%
@@ -88,13 +89,13 @@ class Autoencoder:
     def encoder(self, x_data, parameters):
         for kernel, bias in parameters["kernels"]:
             z = self.conv2D(x_data, kernel) + bias
-            x_data = nn.gelu(z)
+            x_data = nn.selu(z)
 
         z = x_data.reshape(x_data.shape[0], -1)
         for weights, bias in parameters["fc"]:
             x_data = z @ weights + bias
 
-        return x_data
+        return nn.tanh(x_data)
 
     # %% Step 3: create a deconvolutional model that maps the latent space back to an image
     def init_decoder(self, rng, channel_size):
@@ -122,6 +123,7 @@ class Autoencoder:
         r_layers = list(reversed(self.layers))
         for weights, bias in parameters["fc"]:
             z = x_data @ weights + bias
+            z = nn.selu(z)
 
         x_data = z.reshape(
             -1,
@@ -132,7 +134,7 @@ class Autoencoder:
 
         for kernel, bias in parameters["kernels"]:
             z = self.deconv2D(x_data, kernel) + bias
-            x_data = nn.gelu(z)
+            x_data = nn.selu(z)
 
         return x_data
 
@@ -149,7 +151,7 @@ def mse_loss(params, model, batch):
     imgs = batch
     recon_imgs = model(batch, params["encoder"], params["decoder"])
     loss = (
-        ((recon_imgs - batch) ** 2).mean(axis=0).sum()
+        ((recon_imgs - imgs) ** 2).mean(axis=0).sum()
     )  # Mean over batch, sum over pixels
     return loss
 
@@ -173,7 +175,7 @@ params = {
 }
 optim = optax.adam(learning_rate=0.0005)
 opt_state = optim.init(params)
-epochs = 500
+epochs = 1000
 
 for i in (pbar := tqdm(range(epochs))):
     batch = get_batch(data, 128)
@@ -184,19 +186,15 @@ for i in (pbar := tqdm(range(epochs))):
     params = optax.apply_updates(params, updates)
 # %%
 
-rng2  = jax.random.PRNGKey(1331)
+rng2  = jax.random.PRNGKey(1)
 test_data = data_gathering(rng2, env, 32)
 test = autoencoder.encoder(test_data, params["encoder"])
-test[1]
+
+print(test[0])
 # %%
-rng, key = random.split(rng)
+key, rng = random.split(rng)
 random_space = random.choice(key, jnp.array(range(test.shape[0])))
-test_level = (autoencoder.decoder(test[random_space], params["decoder"]))
-
-print(random_space)
-print(test[random_space])
-
-# %%
+test_level = jnp.round(autoencoder.decoder(test[random_space], params["decoder"]))
 def custom_env_state(rng, fixed_grid, variable_grid, agent_location=(0,0)):
     state = State(key=rng
             ,fixed_grid=fixed_grid
@@ -208,9 +206,14 @@ def custom_env_state(rng, fixed_grid, variable_grid, agent_location=(0,0)):
 rng, key = random.split(rng)
 test_level_state = custom_env_state(key, test_level[0,0], test_level[0,1])
 
-test_level_state["variable_grid"]
-# %%
-%matplotlib inline
 # done_level, _ = env.reset(rng)
-# done_level["fixed_grid"]
+    # done_level["fixed_grid"]
 env.render(test_level_state)
+# %%
+remade_level = test_data[random_space]
+# remade_level[0]
+remade_level_state = custom_env_state(key, remade_level[0], remade_level[1])
+
+
+# remade_level_state
+env.render(remade_level_state)
