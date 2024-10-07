@@ -2,7 +2,7 @@
 
 This mini project will be less intense than the previous ones.
 In this mini project, you will train a neural network to classify a dataset of your choice.
-Chose any image dataset you like, but it should be a classification task.
+Chose any image dataset you like, but it a task that allows for optimization.
 You could use MNIST, or look on Kaggle for a dataset that interests you.
 Use convolutional layers and a few dense layers.
 
