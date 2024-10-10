@@ -3,24 +3,45 @@
 # by: Noah Syrkis
 
 # %% Imports
-from jax import random
+from jax import random, lax
 import jax.numpy as jnp
-import jax.scipy as jsp
-from utils import animate
+import seaborn as sns
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
 
 
 # %% Functions
 def init(rng, shape):
-    return random.bernoulli(rng, 0.5, shape)
+    return random.bernoulli(rng, 0.5, shape).astype(jnp.int32)
+
+
+def conv(input, stride: int = 1):
+    kernel = jnp.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]]).reshape(1, 1, 3, 3)
+    return lax.conv(
+        input.reshape(1, 1, input.shape[0], input.shape[1]), kernel, (stride, stride), padding="SAME"
+    ).reshape(input.shape[0], input.shape[1])
 
 
 def step(board):
-    raise NotImplementedError("You need to implement the step function.")
+    neighs = conv(board)
+    new_cells = neighs == 3
+    survived = (neighs == 2) & board
+    return new_cells | survived
 
 
 # %% State
-rng, key = random.split(random.PRNGKey(0))
+rng = random.PRNGKey(0)
 shape = (50, 50)
 board = init(rng, shape)
-boards = [board, init(key, shape)]
-animate(boards, "conway.svg")
+
+
+boards = [board]
+for i in range(100):
+    board = step(board)
+    boards.append(board)
+
+
+fig, axes = plt.subplots(10, 10, figsize=(20, 20))
+for i, ax in enumerate(axes.flat):
+    ax.imshow(boards[i])
+    ax.axis("off")
