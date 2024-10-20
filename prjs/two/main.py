@@ -173,17 +173,19 @@ params = {
     "encoder": autoencoder.init_encoder(rng, 2),
     "decoder": autoencoder.init_decoder(rng, 2),
 }
-optim = optax.adam(learning_rate=0.0005)
-opt_state = optim.init(params)
-epochs = 1000
 
-for i in (pbar := tqdm(range(epochs))):
-    batch = get_batch(data, 128)
-    loss, grad = jax.value_and_grad(mse_loss)(params, autoencoder.forward, batch)
-    pbar.set_description("Current loss   %.3f" % loss)
-    updates, opt_state = optim.update(grad, opt_state, params)
+params["decoder"]["kernels"][1][0].shape
+# optim = optax.adam(learning_rate=0.0005)
+# opt_state = optim.init(params)
+# epochs = 1000
 
-    params = optax.apply_updates(params, updates)
+# for i in (pbar := tqdm(range(epochs))):
+#     batch = get_batch(data, 128)
+#     loss, grad = jax.value_and_grad(mse_loss)(params, autoencoder.forward, batch)
+#     pbar.set_description("Current loss   %.3f" % loss)
+#     updates, opt_state = optim.update(grad, opt_state, params)
+
+#     params = optax.apply_updates(params, updates)
 # %%
 
 rng2  = jax.random.PRNGKey(1)
