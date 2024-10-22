@@ -8,7 +8,6 @@ from optax.losses import sigmoid_binary_cross_entropy
 import matplotlib
 import seaborn as sns
 import matplotlib.pyplot as plt
-from tensorflow.python import training
 from tqdm import tqdm
 from typing import Dict, Tuple, List
 from jax.typing import ArrayLike
@@ -22,9 +21,7 @@ print("Path to dataset files:", path)
 data = jnp.load(path+"/sprites.npy")
 labels = jnp.load(path+"/sprites_labels.npy")
 
-data_transformed = 2* (data/255) - 1
-print(data_transformed.shape[0])
-plt.imshow(data_transformed[0], vmin=-1, vmax=1)
+plt.imshow(data[0])
 # %%
 
 class ConvLayer:
@@ -98,14 +95,13 @@ class BatchNormLayer:
 
         return (running_mean, running_var)
 
-    def forward(self, x, params, running_stats, training=True):
+    def forward(self, x, params, variables, training=True):
         gamma, beta = params
-        running_mean, running_var = running_stats
-
+        running_mean, running_var = variables
 
         if training:
-            batch_mean = jnp.mean(x, axis=(0, 1, 2), keepdims=True)
-            batch_var = jnp.var(x, axis=(0, 1, 2), keepdims=True)
+            batch_mean = jnp.mean(x, axis=(0, 1, 2), keepdims=False)
+            batch_var = jnp.var(x, axis=(0, 1, 2), keepdims=False)
 
             x_hat = (x - batch_mean) / jnp.sqrt(batch_var + self.epsilon)
 
@@ -113,21 +109,17 @@ class BatchNormLayer:
             new_running_var = self.momentum * running_var + (1 - self.momentum) * batch_var
 
             out = gamma * x_hat + beta
+            return out, (new_running_mean, new_running_var)
+        x_hat = (x - running_mean) / jnp.sqrt(running_var + self.epsilon)
 
-
-        else:
-            x_hat = (x - running_mean) / jnp.sqrt(running_var + self.epsilon)
-            out = gamma * x_hat + beta
-            new_running_mean = running_mean
-            new_running_var = running_var
-
-
-        return out, (new_running_mean, new_running_var)
+        out = gamma * x_hat + beta
+        return out, (running_mean, running_var)
 
 
 class Generator:
     def __init__(self, rng, latent_dim, output_channel, hidden_features) -> None:
         self.layers = []
+        self.batch_norm_layers = []
         self.latent_dim = latent_dim
         self.output_channel = output_channel
         self.hidden_features = hidden_features
@@ -147,23 +139,20 @@ class Generator:
         self.layers.append(TransposeConvLayer(input_channels, output_channels, kernel_shape, stride, padding))
 
     def add_batch_norm_layer(self, num_features):
-        self.layers.append(BatchNormLayer(num_features))
+        self.batch_norm_layers.append(BatchNormLayer(num_features))
 
 
     def init_params(self):
         params = []
-        for layer in self.layers:
+        for layer in self.layers + self.batch_norm_layers:
             rng, key = random.split(self.rng)
             params.append(layer.init_params(key))
         return params
 
     def init_variables(self):
         variables = []
-        for layer in self.layers:
-            if isinstance(layer, BatchNormLayer):
-                variables.append(layer.init_variables())
-            else:
-                variables.append(0)
+        for layer in self.batch_norm_layers:
+            variables.append(layer.init_variables())
         return variables
 
     def dropout_fn(self, key, x, dropout):
@@ -172,20 +161,19 @@ class Generator:
         return jnp.where(mask, x / keep_prob, 0)
 
     def forward(self, x, params, variables, training=True):
+        transposed_conv_params = params[:len(self.layers)]
+        batch_norm_params = params[len(self.layers):]
+
         new_variables = []
-        # for layer, param, variable in zip(self.layers[:-1], params[:-1], variables[:-1]):
         for i in range(len(self.layers[:-1])):
-            if isinstance(self.layers[i], BatchNormLayer):
-                x, new_variable = self.layers[i].forward(x, params[i], variables[i], training)
-                print("work")
-                new_variables.append(new_variable)
-                x = nn.relu(x)
-            else:
-                x = self.layers[i].forward(x, params[i])
-        x = nn.relu(x)
-        x = self.layers[-1].forward(x, params[-1])
-        print("finished")
-        return nn.tanh(x), new_variables
+            x = self.layers[i].forward(x, transposed_conv_params[i])
+            x, new_variable = self.batch_norm_layers[i].forward(x, batch_norm_params[i], variables[i], training)
+            new_variables.append(new_variable)
+            x = nn.relu(x)
+        x = self.layers[-1].forward(x, transposed_conv_params[-1])
+        if training:
+            return nn.tanh(x), new_variables
+        return nn.tanh(x)
 
 class Discriminator:
     def __init__(self, rng, input_channels, hidden_features) -> None:
@@ -199,7 +187,8 @@ class Discriminator:
         self.add_conv_layer(self.hidden_features, self.hidden_features*2, 4)
         self.add_conv_layer(self.hidden_features*2, self.hidden_features*4, 4)
 
-        self.add_dense_layer(4*4*self.hidden_features, 1)
+        self.add_dense_layer(4*4*self.hidden_features, self.hidden_features)
+        self.add_dense_layer(self.hidden_features, 1)
 
 
     def add_conv_layer(self, input_channels, output_channels, kernel_shape, stride=2, padding="SAME"):
@@ -220,15 +209,17 @@ class Discriminator:
     def forward(self, x, params):
         conv_params = params[:len(self.conv_layers)]
         dense_params = params[len(self.conv_layers):]
-
-        for layer, param in zip(self.conv_layers, conv_params):
-            x = layer.forward(x, param)
-            x = nn.leaky_relu(x)
-        x = x.reshape(-1, 4*4*self.hidden_features)
-        for layer, param in zip(self.dense_layers[:-1], dense_params[:-1]):
-            x = layer.forward(x, param)
-            x = nn.leaky_relu(x)
-        x = self.dense_layers[-1].forward(x, dense_params[-1])
+        # for layer, param in zip(self.conv_layers, conv_params):
+        for i in range(len(self.conv_layers[:-1])):
+            x = self.conv_layers[i].forward(x, conv_params[i])
+            x = nn.leaky_relu(x, 0.2)
+        x = x.reshape((x.shape[0], -1))
+        # x = x.reshape(-1, 4*4*self.hidden_features)
+        # # for layer, param in zip(self.dense_layers[:-1], dense_params[:-1]):
+        # for i in range(len(self.dense_layers[:-1])):
+        #     x = self.dense_layers[i].forward(x, dense_params[i])
+        #     x = nn.leaky_relu(x, 0.2)
+        # x = self.dense_layers[-1].forward(x, dense_params[-1])
         return x
 # %%
 
@@ -242,7 +233,7 @@ def generator_grad(g_params, d_params, g_variables, G_func, D_func, z):
 
 
 def discriminator_grad(d_params, g_params, g_variables, G_func, D_func, z, x):
-    fake_images, new_g_variables = G_func.forward(z, g_params, g_variables, training=False)
+    fake_images = G_func.forward(z, g_params, g_variables, training=False)
 
     fake_logits = D_func.forward(fake_images, d_params)
     real_logits = D_func.forward(x, d_params)
@@ -278,24 +269,25 @@ rng_d = random.PRNGKey(3113)
 rng_batch = random.PRNGKey(2710)
 
 
-G = Generator(rng_g, latent_dim, img_channel, 128)
+G = Generator(rng_g, latent_dim, img_channel, 64)
 
-D = Discriminator(rng_d, img_channel, 128)
+D = Discriminator(rng_d, img_channel, 64)
 
 g_params = G.init_params()
 d_params = D.init_params()
 
 g_variables = G.init_variables()
 
-g_optimizer = optax.adam(learning_rate=1e-4)
-d_optimizer = optax.adam(learning_rate=1e-5)
+g_optimizer = optax.adam(2e-4, 0.9, 0.99)
+# d_optimizer = optax.adam(2e-4, 0.5, 0.999)
+d_optimizer = optax.rmsprop(learning_rate=5e-5)
 
 
 g_opt_state = g_optimizer.init(g_params)
 d_opt_state = d_optimizer.init(d_params)
-epochs = 1000
+epochs = 500
 batch_size = 128
-clip_value=0.01
+clip_value=0.25
 
 
 # %%
@@ -303,29 +295,29 @@ for _ in (pbar := tqdm(range(epochs))):
 
 
     rng_g, key = random.split(rng_g)
-    batch_real_images = get_batch(data_transformed, rng_batch, batch_size)
+    batch_real_images = get_batch(data, rng_batch, batch_size)
+    batch_real_images = (batch_real_images - 0.5) / 0.5
     z = random.normal(key, (latent_dim,batch_size)).reshape(-1,1,1,latent_dim)
 
-    (g_loss, g_variables), g_grad = value_and_grad(generator_grad, has_aux=True)(g_params, d_params, g_variables, G, D, z)
     d_loss, d_grad = value_and_grad(discriminator_grad)(d_params, g_params, g_variables, G, D, z, batch_real_images)
+    (g_loss, new_g_variables), g_grad = value_and_grad(generator_grad, has_aux=True)(g_params, d_params, g_variables, G, D, z)
 
     pbar.set_description(f"G Loss: {g_loss:.3f} | D Loss: {d_loss:.3f}")
 
     d_params, d_opt_state = update_step(d_params, d_grad, d_optimizer, d_opt_state)
     g_params, g_opt_state = update_step(g_params, g_grad, g_optimizer, g_opt_state)
 
+    g_variables = new_g_variables
     d_params = clip_weights(d_params, clip_value=clip_value)
 
 
 
 
 # %%
-g_variables
-# %%
 rng_g, key = random.split(rng_g)
 test_z = random.normal(key, (latent_dim,)).reshape(-1,1,1,latent_dim)
 
-test_image = G.forward(test_z, g_params, )
+test_image = G.forward(test_z, g_params, g_variables, training=False)
 
-plt.imshow(test_image[0], vmin=-1, vmax=1)
-# %%
+plt.imshow(0.5*test_image[0]+0.5)
+ # %%
